@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#eceff2; --surface:#ffffff; --ink:#17212b; --muted:#6b7480; --line:#d8dde3;
@@ -88,7 +89,7 @@
   .p-簽核中,.p-待簽{background:var(--soft-wait);color:var(--wait)}
   .p-已核准,.p-核准{background:var(--soft-ok);color:var(--ok)}
   .p-已退回,.p-退回{background:var(--soft-bad);color:var(--bad)}
-  .p-已撤回,.p-取消,.p-未到{background:var(--soft-gray);color:var(--gray)}
+  .p-已撤回,.p-取消,.p-未到,.p-已作廢{background:var(--soft-gray);color:var(--gray)}
   .p-已付款{background:var(--soft-paid);color:var(--paid)}
 
   dl{display:grid;grid-template-columns:5.5em 1fr;gap:8px 12px;margin:0}
@@ -112,6 +113,23 @@
   .viewer img{max-width:100%;max-height:100%}
   .center{text-align:center;color:var(--muted);padding:60px 16px}
   .back{background:none;border:none;font:inherit;color:var(--brand);padding:4px 0 12px;cursor:pointer}
+  /* 管理頁 */
+  body.wide main{max-width:1120px}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px}
+  .fgrid .wide2{grid-column:span 2}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .btn.sm{display:inline-block;width:auto;margin:0;padding:10px 16px;font-size:15px}
+  .btn.sec{background:var(--soft-brand);color:var(--brand)}
+  .btn.warnbtn{background:transparent;color:var(--bad);border:1px solid var(--line)}
+  .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+  .agrid .item{margin:0;grid-template-columns:auto 1fr auto;align-items:start}
+  .agrid .item .chk{grid-row:span 3;padding-top:2px}
+  .agrid .item .chk input{width:20px;height:20px;padding:0;accent-color:var(--brand)}
+  .agrid .item .s,.agrid .item .t{grid-column:2}
+  .agrid .item .a,.agrid .item .pill{grid-column:3}
+  .sumline{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:14px;color:var(--muted);margin:0 2px 10px}
+  .sumline b{color:var(--ink);font-variant-numeric:tabular-nums}
+  @media (max-width:520px){ .fgrid .wide2{grid-column:auto} }
   @media (prefers-reduced-motion: no-preference){ .cap.reading{animation:pulse 1.4s ease-in-out infinite} }
   @keyframes pulse{50%{opacity:.6}}
 </style>
@@ -182,6 +200,27 @@
   <div id="v-mine" class="hidden"><div id="mineList"></div></div>
   <div id="v-pending" class="hidden"><div id="pendList"></div></div>
 
+  <!-- 管理 -->
+  <div id="v-admin" class="hidden">
+    <div class="panel">
+      <div class="fgrid">
+        <div><label class="f" for="fFrom">申請日期起</label><input type="date" id="fFrom"></div>
+        <div><label class="f" for="fTo">申請日期迄</label><input type="date" id="fTo"></div>
+        <div><label class="f" for="fCo">公司</label><select id="fCo"></select></div>
+        <div><label class="f" for="fSt">狀態</label><select id="fSt"></select></div>
+        <div class="wide2"><label class="f" for="fQ">關鍵字</label><input id="fQ" placeholder="姓名、單號、發票號碼、店家" onkeydown="if(event.key==='Enter')adminSearch()"></div>
+      </div>
+      <div class="bar">
+        <button class="btn sm" onclick="adminSearch()">查詢</button>
+        <button class="btn sm sec" onclick="exportExcel()">匯出 Excel</button>
+        <button class="btn sm sec" id="batchBtn" onclick="batchPaid()">標記已付款（已勾選 0）</button>
+        <button class="btn sm sec hidden" id="extBtn" onclick="openExternal()">用瀏覽器開啟</button>
+      </div>
+    </div>
+    <div class="sumline" id="adminSum"></div>
+    <div id="adminList"></div>
+  </div>
+
   <div id="v-detail" class="hidden">
     <button class="back" onclick="goBack()">‹ 返回</button>
     <div id="detailBody"></div>
@@ -192,6 +231,7 @@
   <button class="tab" data-v="apply" onclick="show('apply')">申請</button>
   <button class="tab" data-v="mine" onclick="show('mine')">我的申請</button>
   <button class="tab hidden" data-v="pending" id="tabPending" onclick="show('pending')">待我簽核<span class="badge hidden" id="badge"></span></button>
+  <button class="tab hidden" data-v="admin" id="tabAdmin" onclick="show('admin')">管理</button>
 </nav>
 
 <script>
@@ -203,6 +243,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycby5HqwWlGEihTCZUQn36sIP
 let idToken = null, ME = null, current = 'apply', lastList = 'mine', fromLink = false;
 let photos = [];   // { url, status: 'reading'|'done'|'fail', result, warnings, error }
 const dirty = { amount:false, date:false, category:false, desc:false };
+const adminState = { inited:false, list:[], total:0, dirty:true, selected:new Set() };
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -222,7 +263,7 @@ function toast(msg){
 }
 
 function showError(msg){
-  ['loading','bind','apply','mine','pending','detail'].forEach(v => $('#v-'+v).classList.add('hidden'));
+  ['loading','bind','apply','mine','pending','detail','admin'].forEach(v => $('#v-'+v).classList.add('hidden'));
   $('#errMsg').textContent = msg; $('#v-error').classList.remove('hidden');
 }
 
@@ -251,6 +292,7 @@ async function boot(){
     if (!me.bound){ $('#v-bind').classList.remove('hidden'); return; }
     applyMe(me);
     if (wantDetail) openDetail(p.get('id'), true, pre);
+    else if (p.get('mode') === 'admin' && me.isAdmin) show('admin');
     else show(p.get('mode') === 'pending' && me.isApprover ? 'pending' : (p.get('mode') === 'mine' ? 'mine' : 'apply'));
   }catch(e){ showError(e.message); }
 }
@@ -260,6 +302,7 @@ function applyMe(me){
   $('#who').textContent = `${me.me.name}・${me.me.dept}`;
   $('#nav').classList.remove('hidden');
   $('#tabPending').classList.toggle('hidden', !me.isApprover);
+  $('#tabAdmin').classList.toggle('hidden', !me.isAdmin);
   setBadge(me.pendingCount);
   $('#aType').innerHTML = me.types.map((t,i) =>
     `<label><input type="radio" name="type" value="${esc(t)}" ${i===0?'checked':''}><span>${esc(t)}</span></label>`).join('');
@@ -271,11 +314,17 @@ function setBadge(n){ const b = $('#badge'); b.textContent = n; b.classList.togg
 
 function show(v){
   current = v;
-  ['bind','apply','mine','pending','detail','error'].forEach(x => $('#v-'+x).classList.toggle('hidden', x !== v));
+  ['bind','apply','mine','pending','detail','error','admin'].forEach(x => $('#v-'+x).classList.toggle('hidden', x !== v));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.v === v));
-  $('#title').textContent = { apply:'申請費用', mine:'我的申請', pending:'待我簽核', detail:'申請明細' }[v] || '費用簽核';
+  document.body.classList.toggle('wide', v === 'admin' || (v === 'detail' && lastList === 'admin'));
+  $('#title').textContent = { apply:'申請費用', mine:'我的申請', pending:'待我簽核', detail:'申請明細', admin:'單據管理' }[v] || '費用簽核';
   if (v === 'mine') loadList('myList', '#mineList', false);
   if (v === 'pending') loadList('pendingList', '#pendList', true);
+  if (v === 'admin'){
+    lastList = 'admin';
+    if (!adminState.inited) adminInit();
+    if (adminState.dirty) adminSearch();
+  }
   window.scrollTo(0,0);
 }
 
@@ -545,6 +594,8 @@ async function openDetail(id, viaLink, pre){
           ${r['辨識方式'] ? `<dt>辨識方式</dt><dd>${esc(r['辨識方式'])}</dd>` : ''}
           ${r['辨識金額'] !== '' && r['辨識金額'] != null ? `<dt>辨識金額</dt><dd class="num">NT$ ${money(r['辨識金額'])}</dd>` : ''}
           ${partial ? `<dt>核准金額</dt><dd class="num">NT$ ${money(r['核准金額'])}</dd>` : ''}
+          ${r['付款時間'] ? `<dt>付款</dt><dd>${esc(r['付款時間'])}（${esc(r['付款標記人'])}）</dd>` : ''}
+          ${r['作廢時間'] ? `<dt>作廢</dt><dd>${esc(r['作廢時間'])}（${esc(r['作廢人'])}）<br>原因：${esc(r['作廢原因'])}</dd>` : ''}
           <dt>申請時間</dt><dd>${esc(r['申請時間'])}</dd>
         </dl>
       </div>
@@ -571,6 +622,21 @@ async function openDetail(id, viaLink, pre){
       </div>`;
     }
     if (d.canWithdraw) html += `<button class="btn ghost" onclick="withdraw('${esc(r['單號'])}',this)">撤回申請</button>`;
+    if (d.isAdmin){
+      const id = esc(r['單號']);
+      html += `
+      <div class="panel">
+        <p class="sub">管理員操作</p>
+        <div class="bar" style="margin-top:0">
+          <button class="btn sm" onclick="downloadPdf('${id}',this)">簽核單 PDF（列印用）</button>
+          ${d.canPay ? `<button class="btn sm sec" onclick="markPaid(['${id}'],this)">標記已付款</button>` : ''}
+        </div>
+        ${d.canVoid ? `
+        <label class="f" for="vReason">作廢原因</label>
+        <textarea id="vReason" placeholder="例如：重複申請、收據不符規定"></textarea>
+        <button class="btn sm warnbtn" style="margin-top:10px" onclick="voidReq('${id}',this)">作廢這張單</button>` : ''}
+      </div>`;
+    }
     $('#detailBody').innerHTML = html;
     for (let i = 0; i < d.photoCount; i++){
       api('photo', { id: r['單號'], index: i })
@@ -602,6 +668,119 @@ async function withdraw(id, btn){
 function goBack(){
   if (fromLink){ fromLink = false; show(ME && ME.pendingCount ? 'pending' : 'mine'); }
   else show(lastList || 'mine');
+}
+
+/* ===== 管理員 ===== */
+function ymd(d){ const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0,10); }
+
+function adminInit(){
+  adminState.inited = true;
+  const nowD = new Date();
+  $('#fFrom').value = ymd(new Date(nowD.getFullYear(), nowD.getMonth(), 1));
+  $('#fTo').value = ymd(nowD);
+  $('#fCo').innerHTML = '<option value="">全部公司</option>' + (ME.companies || []).map(c => `<option>${esc(c)}</option>`).join('');
+  $('#fSt').innerHTML = '<option value="">全部狀態</option>' + (ME.statuses || []).map(c => `<option>${esc(c)}</option>`).join('');
+  $('#extBtn').classList.toggle('hidden', !(window.liff && liff.isInClient && liff.isInClient()));
+}
+
+async function adminSearch(){
+  adminState.dirty = false;
+  adminState.selected.clear(); updateBatch();
+  $('#adminList').innerHTML = '<div class="center">查詢中…</div>'; $('#adminSum').innerHTML = '';
+  try{
+    const r = await api('adminList', { from: $('#fFrom').value, to: $('#fTo').value, company: $('#fCo').value, status: $('#fSt').value, q: $('#fQ').value.trim() });
+    adminState.list = r.list; adminState.total = r.total;
+    renderAdmin();
+  }catch(e){ $('#adminList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; adminState.dirty = true; }
+}
+
+function renderAdmin(){
+  const L = adminState.list;
+  const sum = (arr, k) => arr.reduce((s,r) => s + (Number(r[k]) || 0), 0);
+  const unpaid = L.filter(r => r['狀態'] === '已核准');
+  const pending = L.filter(r => r['狀態'] === '簽核中');
+  $('#adminSum').innerHTML = `<span>共 <b>${adminState.total}</b> 筆${adminState.total > L.length ? `（顯示前 ${L.length} 筆）` : ''}</span>`
+    + `<span>簽核中 <b>${pending.length}</b> 筆 NT$ <b>${money(sum(pending,'申請金額'))}</b></span>`
+    + `<span>已核准未付款 <b>${unpaid.length}</b> 筆 NT$ <b>${money(sum(unpaid,'核准金額'))}</b></span>`;
+  if (!L.length){ $('#adminList').innerHTML = '<div class="empty">沒有符合條件的單據。</div>'; return; }
+  $('#adminList').innerHTML = '<div class="agrid">' + L.map(r => {
+    const id = esc(r['單號']);
+    const canSel = r['狀態'] === '已核准';
+    return `<div class="item" tabindex="0" onclick="openDetail('${id}')">
+      <span class="chk" onclick="event.stopPropagation()">${canSel ? `<input type="checkbox" aria-label="選取 ${id}" ${adminState.selected.has(r['單號']) ? 'checked' : ''} onchange="toggleSel('${id}',this.checked)">` : ''}</span>
+      <span class="t">${esc(r['姓名'])}・${esc(r['類別'])}${r['檢核備註'] ? '<span class="flag">⚠ 檢核</span>' : ''}</span>
+      <span class="a">NT$ ${money(r['申請金額'])}</span>
+      <span class="s">${esc(r['公司'])}　${esc(String(r['申請時間']).slice(0,10))}　${id}</span>
+      <span class="pill p-${esc(r['狀態'])}">${esc(r['狀態'])}</span>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function toggleSel(id, on){ on ? adminState.selected.add(id) : adminState.selected.delete(id); updateBatch(); }
+function updateBatch(){ $('#batchBtn').textContent = `標記已付款（已勾選 ${adminState.selected.size}）`; }
+
+async function batchPaid(){
+  const ids = [...adminState.selected];
+  if (!ids.length) return toast('請先勾選「已核准」的單據');
+  const total = adminState.list.filter(r => ids.includes(r['單號'])).reduce((s,r) => s + (Number(r['核准金額']) || 0), 0);
+  await markPaid(ids, $('#batchBtn'), `確定把 ${ids.length} 張單（合計 NT$ ${money(total)}）標記為已付款？`);
+}
+
+async function markPaid(ids, btn, msg){
+  if (!confirm(msg || '確定標記為已付款？申請人會收到 LINE 通知。')) return;
+  btn.disabled = true;
+  try{
+    const r = await api('markPaid', { ids });
+    toast(`已標記 ${r.count} 張為已付款` + (r.skipped && r.skipped.length ? `，${r.skipped.length} 張狀態不符略過` : ''));
+    adminState.dirty = true;
+    if (current === 'admin') adminSearch(); else openDetail(ids[0]);
+  }catch(e){ toast(e.message); }
+  btn.disabled = false; updateBatch();
+}
+
+async function voidReq(id, btn){
+  const reason = $('#vReason').value.trim();
+  if (!reason) return toast('請填寫作廢原因');
+  if (!confirm('確定作廢這張單？申請人會收到 LINE 通知，作廢後無法復原。')) return;
+  btn.disabled = true;
+  try{ await api('voidReq', { id, reason }); toast('已作廢'); adminState.dirty = true; openDetail(id); }
+  catch(e){ toast(e.message); btn.disabled = false; }
+}
+
+async function downloadPdf(id, btn){
+  const inLine = window.liff && liff.isInClient && liff.isInClient();
+  const win = inLine ? null : window.open('', '_blank');
+  if (win) win.document.write('<p style="font-family:sans-serif;padding:20px">簽核單產生中，請稍候…</p>');
+  btn.disabled = true; const label = btn.textContent; btn.textContent = '產生中…';
+  try{
+    const r = await api('pdf', { id });
+    const bytes = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type:'application/pdf' }));
+    if (win) win.location.href = url;
+    else { const a = document.createElement('a'); a.href = url; a.download = r.name; document.body.appendChild(a); a.click(); a.remove(); }
+  }catch(e){ if (win) win.close(); toast(e.message); }
+  btn.disabled = false; btn.textContent = label;
+}
+
+function exportExcel(){
+  if (typeof XLSX === 'undefined') return toast('Excel 元件載入失敗，請重新整理');
+  if (!adminState.list.length) return toast('沒有資料可匯出，請先查詢');
+  const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','發票號碼',
+    '申請金額','核准金額','辨識金額','狀態','檢核備註','簽核紀錄','結案時間','付款時間','付款標記人','作廢時間','作廢人','作廢原因'];
+  const rows = adminState.list.map(r => {
+    const o = {};
+    cols.forEach(c => { const k = c === '店家' ? '賣方' : c; let v = r[k] ?? ''; if (['申請金額','核准金額','辨識金額'].includes(c) && v !== '') v = Number(v); o[c] = v; });
+    return o;
+  });
+  const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
+  ws['!cols'] = cols.map(c => ({ wch: ({'說明':28,'檢核備註':36,'簽核紀錄':44,'申請時間':17,'結案時間':17,'付款時間':17,'作廢時間':17,'作廢原因':24,'發票號碼':14,'店家':18}[c] || 11) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '費用簽核');
+  XLSX.writeFile(wb, `費用簽核_${$('#fFrom').value || ''}_${$('#fTo').value || ''}.xlsx`);
+}
+
+function openExternal(){
+  liff.openWindow({ url: `https://liff.line.me/${LIFF_ID}?mode=admin`, external: true });
 }
 
 function viewImg(src){
