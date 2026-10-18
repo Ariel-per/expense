@@ -451,7 +451,8 @@ function renderCheck(){
     if (p.status === 'reading') return `<li><b>收據 ${i+1}</b>　辨識中…</li>`;
     if (p.status === 'fail') return `<li><b>收據 ${i+1}</b>　無法自動辨識，請手動填寫金額<br><span>${esc(p.error || '')}</span></li>`;
     const r = p.result;
-    const meta = [r.seller, r.invoiceNo, r.date].filter(Boolean).join('　');
+    const meta = [r.seller, r.sellerTaxId && ('賣方統編 ' + r.sellerTaxId),
+      r.buyerTaxId && !/^0+$/.test(r.buyerTaxId) && ('買方統編 ' + r.buyerTaxId), r.invoiceNo, r.date].filter(Boolean).join('　');
     const items = (r.items || []).slice(0,5).map(it => it.name + (it.qty > 1 ? '×' + it.qty : '')).join('、');
     return `<li><b>收據 ${i+1}</b>　${r.source === 'qr' ? '電子發票' : 'AI 辨識'}　NT$ ${money(r.amount)}`
       + (meta ? `<br><span>${esc(meta)}</span>` : '') + (items ? `<br><span>${esc(items)}</span>` : '') + '</li>';
@@ -591,6 +592,8 @@ async function openDetail(id, viaLink, pre){
           <dt>說明</dt><dd>${esc(r['說明'] || '—')}</dd>
           ${r['賣方'] ? `<dt>店家</dt><dd>${esc(r['賣方'])}</dd>` : ''}
           ${r['發票號碼'] ? `<dt>發票號碼</dt><dd class="num">${esc(String(r['發票號碼']).replace(/,/g, '、'))}</dd>` : ''}
+          ${r['賣方統編'] ? `<dt>賣方統編</dt><dd class="num">${esc(String(r['賣方統編']).replace(/,/g, '、'))}</dd>` : ''}
+          ${r['買方統編'] ? `<dt>買方統編</dt><dd class="num">${esc(String(r['買方統編']).replace(/,/g, '、'))}</dd>` : ''}
           ${r['辨識方式'] ? `<dt>辨識方式</dt><dd>${esc(r['辨識方式'])}</dd>` : ''}
           ${r['辨識金額'] !== '' && r['辨識金額'] != null ? `<dt>辨識金額</dt><dd class="num">NT$ ${money(r['辨識金額'])}</dd>` : ''}
           ${partial ? `<dt>核准金額</dt><dd class="num">NT$ ${money(r['核准金額'])}</dd>` : ''}
@@ -765,7 +768,7 @@ async function downloadPdf(id, btn){
 function exportExcel(){
   if (typeof XLSX === 'undefined') return toast('Excel 元件載入失敗，請重新整理');
   if (!adminState.list.length) return toast('沒有資料可匯出，請先查詢');
-  const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','發票號碼',
+  const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','賣方統編','買方統編','發票號碼',
     '申請金額','核准金額','辨識金額','狀態','檢核備註','簽核紀錄','結案時間','付款時間','付款標記人','作廢時間','作廢人','作廢原因'];
   const rows = adminState.list.map(r => {
     const o = {};
@@ -773,7 +776,7 @@ function exportExcel(){
     return o;
   });
   const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
-  ws['!cols'] = cols.map(c => ({ wch: ({'說明':28,'檢核備註':36,'簽核紀錄':44,'申請時間':17,'結案時間':17,'付款時間':17,'作廢時間':17,'作廢原因':24,'發票號碼':14,'店家':18}[c] || 11) }));
+  ws['!cols'] = cols.map(c => ({ wch: ({'說明':28,'檢核備註':36,'簽核紀錄':44,'申請時間':17,'結案時間':17,'付款時間':17,'作廢時間':17,'作廢原因':24,'發票號碼':14,'店家':18,'賣方統編':11,'買方統編':11}[c] || 11) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '費用簽核');
   XLSX.writeFile(wb, `費用簽核_${$('#fFrom').value || ''}_${$('#fTo').value || ''}.xlsx`);
