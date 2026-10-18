@@ -219,7 +219,9 @@
       <div class="bar">
         <button class="btn sm" onclick="adminSearch()">查詢</button>
         <button class="btn sm sec" onclick="exportExcel()">匯出 Excel</button>
-        <button class="btn sm sec" id="batchBtn" onclick="batchPaid()">標記已付款（已勾選 0）</button>
+        <button class="btn sm sec" id="selAllBtn" onclick="toggleAll()">全選</button>
+        <button class="btn sm sec" id="pdfBtn" onclick="batchPdf()">簽核單 PDF（已勾選 0）</button>
+        <button class="btn sm sec" id="batchBtn" onclick="batchPaid()">標記已付款（0）</button>
         <button class="btn sm sec hidden" id="extBtn" onclick="openExternal()">用瀏覽器開啟</button>
       </div>
     </div>
@@ -738,9 +740,8 @@ function renderAdmin(){
   if (!L.length){ $('#adminList').innerHTML = '<div class="empty">沒有符合條件的單據。</div>'; return; }
   $('#adminList').innerHTML = '<div class="agrid">' + L.map(r => {
     const id = esc(r['單號']);
-    const canSel = r['狀態'] === '已核准';
     return `<div class="item" tabindex="0" onclick="openDetail('${id}')">
-      <span class="chk" onclick="event.stopPropagation()">${canSel ? `<input type="checkbox" aria-label="選取 ${id}" ${adminState.selected.has(r['單號']) ? 'checked' : ''} onchange="toggleSel('${id}',this.checked)">` : ''}</span>
+      <span class="chk" onclick="event.stopPropagation()"><input type="checkbox" aria-label="選取 ${id}" ${adminState.selected.has(r['單號']) ? 'checked' : ''} onchange="toggleSel('${id}',this.checked)"></span>
       <span class="t">${esc(r['姓名'])}・${esc(r['類別'])}${r['檢核備註'] ? '<span class="flag">⚠ 檢核</span>' : ''}</span>
       <span class="a">NT$ ${money(r['申請金額'])}</span>
       <span class="s">${esc(r['公司'])}　${esc(String(r['申請時間']).slice(0,10))}　${id}</span>
@@ -750,11 +751,46 @@ function renderAdmin(){
 }
 
 function toggleSel(id, on){ on ? adminState.selected.add(id) : adminState.selected.delete(id); updateBatch(); }
-function updateBatch(){ $('#batchBtn').textContent = `標記已付款（已勾選 ${adminState.selected.size}）`; }
+function payableSelected(){ return adminState.list.filter(r => adminState.selected.has(r['單號']) && r['狀態'] === '已核准').map(r => r['單號']); }
+
+function updateBatch(){
+  $('#pdfBtn').textContent = `簽核單 PDF（已勾選 ${adminState.selected.size}）`;
+  $('#batchBtn').textContent = `標記已付款（${payableSelected().length}）`;
+  const all = adminState.list.length && adminState.list.every(r => adminState.selected.has(r['單號']));
+  $('#selAllBtn').textContent = all ? '取消全選' : '全選';
+}
+
+function toggleAll(){
+  const all = adminState.list.length && adminState.list.every(r => adminState.selected.has(r['單號']));
+  adminState.selected = new Set(all ? [] : adminState.list.map(r => r['單號']));
+  renderAdmin(); updateBatch();
+}
+
+async function batchPdf(){
+  const ids = adminState.list.map(r => r['單號']).filter(id => adminState.selected.has(id));
+  if (!ids.length) return toast('請先勾選要產生簽核單的單據');
+  if (ids.length > 20) return toast(`一次最多 20 張，目前勾選 ${ids.length} 張，請分批產生`);
+  if (inLineApp()){
+    if (await ask('LINE 裡無法下載檔案，要改用手機瀏覽器開啟管理頁嗎？開啟後需要重新查詢、勾選。', '用瀏覽器開啟')) openExternal();
+    return;
+  }
+  const btn = $('#pdfBtn');
+  const win = window.open('', '_blank');
+  if (win) win.document.write(`<p style="font-family:sans-serif;padding:20px">正在產生 ${ids.length} 張簽核單，請稍候…</p>`);
+  btn.disabled = true; btn.textContent = `產生中（${ids.length} 張）…`;
+  try{
+    const r = await api('pdfBatch', { ids });
+    const bytes = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type:'application/pdf' }));
+    if (win) win.location.href = url;
+    else { const a = document.createElement('a'); a.href = url; a.download = r.name; document.body.appendChild(a); a.click(); a.remove(); }
+  }catch(e){ if (win) win.close(); toast(e.message); }
+  btn.disabled = false; updateBatch();
+}
 
 async function batchPaid(){
-  const ids = [...adminState.selected];
-  if (!ids.length) return toast('請先勾選「已核准」的單據');
+  const ids = payableSelected();
+  if (!ids.length) return toast('勾選的單據中沒有「已核准」的單');
   const total = adminState.list.filter(r => ids.includes(r['單號'])).reduce((s,r) => s + (Number(r['核准金額']) || 0), 0);
   await markPaid(ids, $('#batchBtn'), `確定把 ${ids.length} 張單（合計 NT$ ${money(total)}）標記為已付款？`);
 }
