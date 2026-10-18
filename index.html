@@ -246,7 +246,8 @@ const LIFF_ID = '2012066652-7rIy3tux';
 const API_URL = 'https://script.google.com/macros/s/AKfycby5HqwWlGEihTCZUQn36sIPPL3R3vcUeJZJs6UCWV1G9pxUqHVmRBL6mCmnwc20g4Eg3g/exec';
 /* =========================== */
 
-let idToken = null, ME = null, current = 'apply', lastList = 'mine', fromLink = false;
+let idToken = null, ME = null, current = 'apply', lastList = 'mine', fromLink = false, autoPdf = false;
+const inLineApp = () => !!(window.liff && liff.isInClient && liff.isInClient());
 let photos = [];   // { url, status: 'reading'|'done'|'fail', result, warnings, error }
 const dirty = { amount:false, date:false, category:false, desc:false };
 const adminState = { inited:false, list:[], total:0, dirty:true, selected:new Set() };
@@ -314,6 +315,7 @@ async function boot(){
     $('#v-loading').classList.add('hidden');
     if (!me.bound){ $('#v-bind').classList.remove('hidden'); return; }
     applyMe(me);
+    autoPdf = p.get('pdf') === '1' && !inLineApp();
     if (wantDetail) openDetail(p.get('id'), true, pre);
     else if (p.get('mode') === 'admin' && me.isAdmin) show('admin');
     else show(p.get('mode') === 'pending' && me.isApprover ? 'pending' : (p.get('mode') === 'mine' ? 'mine' : 'apply'));
@@ -664,6 +666,11 @@ async function openDetail(id, viaLink, pre){
       </div>`;
     }
     $('#detailBody').innerHTML = html;
+    if (autoPdf && d.isAdmin){
+      autoPdf = false;
+      const b = document.querySelector('#detailBody .btn.sm');
+      if (b) downloadPdf(r['單號'], b);
+    }
     for (let i = 0; i < d.photoCount; i++){
       api('photo', { id: r['單號'], index: i })
         .then(x => { const el = $('#ph' + i); if (el) el.innerHTML = `<img src="${x.src}" alt="收據 ${i+1}" onclick="viewImg(this.src)">`; })
@@ -706,7 +713,7 @@ function adminInit(){
   $('#fTo').value = ymd(nowD);
   $('#fCo').innerHTML = '<option value="">全部公司</option>' + (ME.companies || []).map(c => `<option>${esc(c)}</option>`).join('');
   $('#fSt').innerHTML = '<option value="">全部狀態</option>' + (ME.statuses || []).map(c => `<option>${esc(c)}</option>`).join('');
-  $('#extBtn').classList.toggle('hidden', !(window.liff && liff.isInClient && liff.isInClient()));
+  $('#extBtn').classList.toggle('hidden', !inLineApp());
 }
 
 async function adminSearch(){
@@ -774,8 +781,12 @@ async function voidReq(id, btn){
 }
 
 async function downloadPdf(id, btn){
-  const inLine = window.liff && liff.isInClient && liff.isInClient();
-  const win = inLine ? null : window.open('', '_blank');
+  if (inLineApp()){
+    if (await ask('LINE 裡無法下載檔案，要改用手機瀏覽器開啟這張單並下載 PDF 嗎？', '用瀏覽器開啟'))
+      liff.openWindow({ url: `https://liff.line.me/${LIFF_ID}?mode=detail&id=${encodeURIComponent(id)}&pdf=1`, external: true });
+    return;
+  }
+  const win = window.open('', '_blank');
   if (win) win.document.write('<p style="font-family:sans-serif;padding:20px">簽核單產生中，請稍候…</p>');
   btn.disabled = true; const label = btn.textContent; btn.textContent = '產生中…';
   try{
@@ -788,7 +799,11 @@ async function downloadPdf(id, btn){
   btn.disabled = false; btn.textContent = label;
 }
 
-function exportExcel(){
+async function exportExcel(){
+  if (inLineApp()){
+    if (await ask('LINE 裡無法下載檔案，要改用手機瀏覽器開啟管理頁再匯出嗎？', '用瀏覽器開啟')) openExternal();
+    return;
+  }
   if (typeof XLSX === 'undefined') return toast('Excel 元件載入失敗，請重新整理');
   if (!adminState.list.length) return toast('沒有資料可匯出，請先查詢');
   const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','賣方統編','買方統編','發票號碼',
