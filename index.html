@@ -130,6 +130,12 @@
   .sumline{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:14px;color:var(--muted);margin:0 2px 10px}
   .sumline b{color:var(--ink);font-variant-numeric:tabular-nums}
   @media (max-width:520px){ .fgrid .wide2{grid-column:auto} }
+  /* 自訂確認框 */
+  .dlg-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:24px}
+  .dlg{background:var(--surface);color:var(--ink);border-radius:16px;padding:22px 20px 16px;width:100%;max-width:340px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .dlg p{margin:0 0 18px;font-size:16px;line-height:1.6;text-align:center}
+  .dlg .btnrow .btn{margin-top:0;padding:12px}
+  .dlg .btn.cancel{background:var(--bg);color:var(--ink)}
   @media (prefers-reduced-motion: no-preference){ .cap.reading{animation:pulse 1.4s ease-in-out infinite} }
   @keyframes pulse{50%{opacity:.6}}
 </style>
@@ -255,6 +261,23 @@ async function api(action, data){
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || '發生錯誤');
   return j;
+}
+
+/** 頁面內的確認框（取代瀏覽器內建 confirm，不會顯示網址） */
+function ask(msg, okLabel = '確定', tone = ''){
+  return new Promise(resolve => {
+    const bg = document.createElement('div');
+    bg.className = 'dlg-bg';
+    bg.innerHTML = `<div class="dlg" role="dialog" aria-modal="true"><p>${esc(msg)}</p>
+      <div class="btnrow"><button class="btn cancel">取消</button><button class="btn ${tone}">${esc(okLabel)}</button></div></div>`;
+    const done = v => { bg.remove(); resolve(v); };
+    const [cancel, ok] = bg.querySelectorAll('button');
+    cancel.onclick = () => done(false);
+    ok.onclick = () => done(true);
+    bg.onclick = e => { if (e.target === bg) done(false); };
+    document.body.appendChild(bg);
+    ok.focus();
+  });
 }
 
 function toast(msg){
@@ -652,7 +675,7 @@ async function openDetail(id, viaLink, pre){
 async function decide(id, result){
   const comment = $('#dComment').value.trim();
   if (result === '退回' && !comment) return toast('退回請填寫原因');
-  if (!confirm(`確定${result}這張申請？`)) return;
+  if (!(await ask(`確定${result}這張申請？`, result, result === '核准' ? 'ok' : 'bad'))) return;
   document.querySelectorAll('.btnrow .btn').forEach(b => b.disabled = true);
   try{
     await api('decide', { id, result, comment });
@@ -662,7 +685,7 @@ async function decide(id, result){
 }
 
 async function withdraw(id, btn){
-  if (!confirm('確定撤回這張申請？撤回後需重新送出。')) return;
+  if (!(await ask('確定撤回這張申請？撤回後需重新送出。', '撤回', 'bad'))) return;
   btn.disabled = true;
   try{ await api('withdraw', { id }); toast('已撤回'); show('mine'); }
   catch(e){ toast(e.message); btn.disabled = false; }
@@ -730,7 +753,7 @@ async function batchPaid(){
 }
 
 async function markPaid(ids, btn, msg){
-  if (!confirm(msg || '確定標記為已付款？申請人會收到 LINE 通知。')) return;
+  if (!(await ask(msg || '確定標記為已付款？申請人會收到 LINE 通知。', '標記已付款'))) return;
   btn.disabled = true;
   try{
     const r = await api('markPaid', { ids });
@@ -744,7 +767,7 @@ async function markPaid(ids, btn, msg){
 async function voidReq(id, btn){
   const reason = $('#vReason').value.trim();
   if (!reason) return toast('請填寫作廢原因');
-  if (!confirm('確定作廢這張單？申請人會收到 LINE 通知，作廢後無法復原。')) return;
+  if (!(await ask('確定作廢這張單？申請人會收到 LINE 通知，作廢後無法復原。', '作廢', 'bad'))) return;
   btn.disabled = true;
   try{ await api('voidReq', { id, reason }); toast('已作廢'); adminState.dirty = true; openDetail(id); }
   catch(e){ toast(e.message); btn.disabled = false; }
