@@ -391,6 +391,7 @@ function renderPhotos(){
     let cap = '';
     if (p.status === 'reading') cap = '<div class="cap reading">辨識中…</div>';
     else if (p.status === 'fail') cap = '<div class="cap fail">請手動填寫</div>';
+    else if (p.result && p.result.partial && !Number(p.result.amount)) cap = `<div class="cap">多頁發票${p.result.page ? '・第' + p.result.page + '頁' : ''}</div>`;
     else if (p.result) cap = `<div class="cap">${p.result.source === 'qr' ? '電子發票' : 'AI'}　NT$ ${money(p.result.amount)}</div>`;
     return `<div class="photo"><img src="${p.url}" alt="收據 ${i+1}" onclick="viewImg(this.src)">${cap}<button aria-label="移除" onclick="removePhoto(${i})">×</button></div>`;
   }).join('');
@@ -490,7 +491,10 @@ function renderCheck(){
     const items = (r.items || []).slice(0,5).map(it => it.name + (it.qty > 1 ? '×' + it.qty : '')).join('、');
     const tc = r.taxCode || {};
     const typeLine = r.docType ? `<br><span>${esc(r.docType)}　格式代號：${esc(tc.label || '不適用')}</span>` : '';
-    return `<li><b>收據 ${i+1}</b>　${r.source === 'qr' ? '電子發票' : 'AI 辨識'}　NT$ ${money(r.amount)}` + typeLine
+    const amt = r.partial && !Number(r.amount)
+      ? `多頁發票${r.page ? '第 ' + r.page + ' 頁' : ''}（總額在其他頁）`
+      : `NT$ ${money(r.amount)}${r.partial && r.page ? `（多頁發票第 ${r.page} 頁）` : ''}`;
+    return `<li><b>收據 ${i+1}</b>　${r.source === 'qr' ? '電子發票' : 'AI 辨識'}　${amt}` + typeLine
       + (meta ? `<br><span>${esc(meta)}</span>` : '') + (items ? `<br><span>${esc(items)}</span>` : '') + '</li>';
   }).join('');
   const warns = photos.filter(p => p.status === 'done').flatMap(p => p.warnings || []);
@@ -569,7 +573,7 @@ async function doSubmit(){
         source: p.status === 'done' ? r.source : 'manual',
         invoiceNo: r.invoiceNo || '', seller: r.seller || '',
         sellerTaxId: r.sellerTaxId || '', buyerTaxId: r.buyerTaxId || '',
-        amount: r.amount || 0, confidence: r.confidence || '', isReceipt: r.isReceipt !== false, docType: r.docType || ''
+        amount: r.amount || 0, confidence: r.confidence || '', isReceipt: r.isReceipt !== false, docType: r.docType || '', partial: r.partial === true
       };
     })
   };
