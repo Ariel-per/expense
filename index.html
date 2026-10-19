@@ -451,7 +451,9 @@ async function recognize(p, canvas){
     if (!photos.includes(p)) return;
     if (qr){ // AI 失敗但 QR 讀到了，照樣可用
       p.status = 'done';
-      p.result = { source:'qr', ...qr, seller:'', category:'', summary: qr.items.slice(0,3).map(i=>i.name).join('、'), confidence:'high', isReceipt:true };
+      const hasBuyer = qr.buyerTaxId && !/^0+$/.test(qr.buyerTaxId);
+      p.result = { source:'qr', ...qr, seller:'', category:'', summary: qr.items.slice(0,3).map(i=>i.name).join('、'), confidence:'high', isReceipt:true,
+        docType:'電子發票', taxCode: hasBuyer ? { code:'25', label:'25' } : { code:'', label:'未打統編' } };
       p.warnings = [];
     } else { p.status = 'fail'; p.error = e.message; }
   }
@@ -481,7 +483,9 @@ function renderCheck(){
     const meta = [r.seller, r.sellerTaxId && ('賣方統編 ' + r.sellerTaxId),
       r.buyerTaxId && !/^0+$/.test(r.buyerTaxId) && ('買方統編 ' + r.buyerTaxId), r.invoiceNo, r.date].filter(Boolean).join('　');
     const items = (r.items || []).slice(0,5).map(it => it.name + (it.qty > 1 ? '×' + it.qty : '')).join('、');
-    return `<li><b>收據 ${i+1}</b>　${r.source === 'qr' ? '電子發票' : 'AI 辨識'}　NT$ ${money(r.amount)}`
+    const tc = r.taxCode || {};
+    const typeLine = r.docType ? `<br><span>${esc(r.docType)}　格式代號：${esc(tc.label || '不適用')}</span>` : '';
+    return `<li><b>收據 ${i+1}</b>　${r.source === 'qr' ? '電子發票' : 'AI 辨識'}　NT$ ${money(r.amount)}` + typeLine
       + (meta ? `<br><span>${esc(meta)}</span>` : '') + (items ? `<br><span>${esc(items)}</span>` : '') + '</li>';
   }).join('');
   const warns = photos.filter(p => p.status === 'done').flatMap(p => p.warnings || []);
@@ -558,7 +562,7 @@ async function doSubmit(){
         source: p.status === 'done' ? r.source : 'manual',
         invoiceNo: r.invoiceNo || '', seller: r.seller || '',
         sellerTaxId: r.sellerTaxId || '', buyerTaxId: r.buyerTaxId || '',
-        amount: r.amount || 0, confidence: r.confidence || '', isReceipt: r.isReceipt !== false
+        amount: r.amount || 0, confidence: r.confidence || '', isReceipt: r.isReceipt !== false, docType: r.docType || ''
       };
     })
   };
@@ -621,6 +625,8 @@ async function openDetail(id, viaLink, pre){
           ${r['發票號碼'] ? `<dt>發票號碼</dt><dd class="num">${esc(String(r['發票號碼']).replace(/,/g, '、'))}</dd>` : ''}
           ${r['賣方統編'] ? `<dt>賣方統編</dt><dd class="num">${esc(String(r['賣方統編']).replace(/,/g, '、'))}</dd>` : ''}
           ${r['買方統編'] ? `<dt>買方統編</dt><dd class="num">${esc(String(r['買方統編']).replace(/,/g, '、'))}</dd>` : ''}
+          ${r['憑證類型'] ? `<dt>憑證類型</dt><dd>${esc(r['憑證類型'])}</dd>` : ''}
+          ${r['格式代號'] ? `<dt>格式代號</dt><dd class="num">${esc(r['格式代號'])}</dd>` : ''}
           ${r['辨識方式'] ? `<dt>辨識方式</dt><dd>${esc(r['辨識方式'])}</dd>` : ''}
           ${r['辨識金額'] !== '' && r['辨識金額'] != null ? `<dt>辨識金額</dt><dd class="num">NT$ ${money(r['辨識金額'])}</dd>` : ''}
           ${partial ? `<dt>核准金額</dt><dd class="num">NT$ ${money(r['核准金額'])}</dd>` : ''}
@@ -842,7 +848,7 @@ async function exportExcel(){
   }
   if (typeof XLSX === 'undefined') return toast('Excel 元件載入失敗，請重新整理');
   if (!adminState.list.length) return toast('沒有資料可匯出，請先查詢');
-  const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','賣方統編','買方統編','發票號碼',
+  const cols = ['單號','申請時間','公司','部門','員工編號','姓名','單別','費用日期','類別','說明','店家','賣方統編','買方統編','發票號碼','憑證類型','格式代號',
     '申請金額','核准金額','辨識金額','狀態','檢核備註','簽核紀錄','結案時間','付款時間','付款標記人','作廢時間','作廢人','作廢原因'];
   const rows = adminState.list.map(r => {
     const o = {};
@@ -850,7 +856,7 @@ async function exportExcel(){
     return o;
   });
   const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
-  ws['!cols'] = cols.map(c => ({ wch: ({'說明':28,'檢核備註':36,'簽核紀錄':44,'申請時間':17,'結案時間':17,'付款時間':17,'作廢時間':17,'作廢原因':24,'發票號碼':14,'店家':18,'賣方統編':11,'買方統編':11}[c] || 11) }));
+  ws['!cols'] = cols.map(c => ({ wch: ({'說明':28,'檢核備註':36,'簽核紀錄':44,'申請時間':17,'結案時間':17,'付款時間':17,'作廢時間':17,'作廢原因':24,'發票號碼':14,'店家':18,'賣方統編':11,'買方統編':11,'憑證類型':16,'格式代號':10}[c] || 11) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '費用簽核');
   XLSX.writeFile(wb, `費用簽核_${$('#fFrom').value || ''}_${$('#fTo').value || ''}.xlsx`);
