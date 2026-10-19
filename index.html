@@ -407,10 +407,10 @@ $('#aFile').addEventListener('change', async e => {
   e.target.value = '';
   for (const f of files){
     try{
-      const canvas = await loadCanvas(f);
+      const { canvas, scan } = await loadCanvas(f);
       const p = { url: canvas.toDataURL('image/jpeg', 0.8), status: 'reading' };
       photos.push(p); renderPhotos(); renderCheck();
-      recognize(p, canvas);
+      recognize(p, canvas, scan);
     }catch(err){ toast(err.message); }
   }
 });
@@ -419,11 +419,16 @@ function loadCanvas(file){
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file), img = new Image();
     img.onload = () => {
-      const max = 1600, s = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
-      c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url); res(c);
+      const make = max => {
+        const s = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height);
+        return c;
+      };
+      const canvas = make(1600);       // 上傳用
+      const scan = make(2600);         // 掃 QR code 用，解析度高一點，小張的發票也讀得到
+      URL.revokeObjectURL(url); res({ canvas, scan });
     };
     img.onerror = () => rej(new Error('無法讀取圖片：' + file.name));
     img.src = url;
@@ -439,10 +444,10 @@ function smallJpeg(canvas, max){
   return c.toDataURL('image/jpeg', 0.75);
 }
 
-async function recognize(p, canvas){
+async function recognize(p, canvas, scan){
   await new Promise(r => setTimeout(r, 30)); // 先讓「辨識中」顯示出來
   let qr = null;
-  try{ qr = scanInvoice(canvas); }catch(e){ qr = null; }
+  try{ qr = scanInvoice(scan || canvas); }catch(e){ qr = null; }
   try{
     const r = await api('ocr', { image: smallJpeg(canvas, 1024).split(',')[1], qr });
     if (!photos.includes(p)) return;
@@ -502,13 +507,15 @@ function scanInvoice(canvas){
   if (typeof jsQR !== 'function') return null;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const W = canvas.width, H = canvas.height;
-  // 兩個 QR 並排時 jsQR 一次只讀一個，所以分區域掃描
-  const regions = [[0,0,1,1],[0,0,.55,1],[.45,0,.55,1],[0,.35,.55,.65],[.45,.35,.55,.65],[0,.5,1,.5]];
+  // 兩個 QR 並排時 jsQR 一次只讀一個，而且發票在照片裡可能很小，所以切成多個區塊掃描
+  const regions = [[0,0,1,1],[0,0,.55,1],[.45,0,.55,1]];
+  for (const ry of [0,.25,.5]) for (const rx of [0,.25,.5]) regions.push([rx,ry,.5,.5]);
+  for (const ry of [.15,.4]) for (const rx of [.1,.35]) regions.push([rx,ry,.3,.3]);
   let left = null, right = null;
   for (const [rx,ry,rw,rh] of regions){
     const x = Math.round(rx*W), y = Math.round(ry*H), w = Math.round(rw*W), h = Math.round(rh*H);
     const img = ctx.getImageData(x, y, w, h);
-    const code = jsQR(img.data, w, h, { inversionAttempts: 'dontInvert' });
+    const code = jsQR(img.data, w, h, { inversionAttempts: 'attemptBoth' });
     if (!code || !code.binaryData || code.binaryData.length < 10) continue;
     const b = code.binaryData;
     if (b[0] === 42 && b[1] === 42) right = right || b;
