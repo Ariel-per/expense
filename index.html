@@ -250,7 +250,16 @@ const API_URL = 'https://script.google.com/macros/s/AKfycby5HqwWlGEihTCZUQn36sIP
 
 let idToken = null, ME = null, current = 'apply', lastList = 'mine', fromLink = false, autoPdf = false;
 const inLineApp = () => !!(window.liff && liff.isInClient && liff.isInClient());
-let photos = [];   // { url, status: 'reading'|'done'|'fail', result, warnings, error }
+let photos = [];   // { url, status: 'queued'|'reading'|'done'|'fail', result, warnings, error, canvas, scan }
+let ocrQueue = Promise.resolve();
+function enqueueOcr(p){
+  p.status = 'queued';
+  ocrQueue = ocrQueue.then(() => photos.includes(p) ? recognize(p, p.canvas, p.scan) : null).catch(() => {});
+}
+function retryPhoto(i){
+  const p = photos[i]; if (!p) return;
+  enqueueOcr(p); renderPhotos(); renderCheck();
+}
 const dirty = { amount:false, date:false, category:false, desc:false };
 const adminState = { inited:false, list:[], total:0, dirty:true, selected:new Set() };
 
@@ -390,7 +399,8 @@ function renderPhotos(){
   let html = photos.map((p,i) => {
     let cap = '';
     if (p.status === 'reading') cap = '<div class="cap reading">辨識中…</div>';
-    else if (p.status === 'fail') cap = '<div class="cap fail">請手動填寫</div>';
+    else if (p.status === 'queued') cap = '<div class="cap">等待中…</div>';
+    else if (p.status === 'fail') cap = `<div class="cap fail" role="button" style="cursor:pointer" onclick="event.stopPropagation();retryPhoto(${i})">↻ 重新辨識</div>`;
     else if (p.result && p.result.partial && !Number(p.result.amount)) cap = `<div class="cap">多頁發票${p.result.page ? '・第' + p.result.page + '頁' : ''}</div>`;
     else if (p.result) cap = `<div class="cap">${p.result.source === 'qr' ? '電子發票' : 'AI'}　NT$ ${money(p.result.amount)}</div>`;
     return `<div class="photo"><img src="${p.url}" alt="收據 ${i+1}" onclick="viewImg(this.src)">${cap}<button aria-label="移除" onclick="removePhoto(${i})">×</button></div>`;
@@ -409,9 +419,8 @@ $('#aFile').addEventListener('change', async e => {
   for (const f of files){
     try{
       const { canvas, scan } = await loadCanvas(f);
-      const p = { url: canvas.toDataURL('image/jpeg', 0.8), status: 'reading' };
-      photos.push(p); renderPhotos(); renderCheck();
-      recognize(p, canvas, scan);
+      const p = { url: canvas.toDataURL('image/jpeg', 0.8), canvas, scan };
+      photos.push(p); enqueueOcr(p); renderPhotos(); renderCheck();
     }catch(err){ toast(err.message); }
   }
 });
@@ -446,6 +455,7 @@ function smallJpeg(canvas, max){
 }
 
 async function recognize(p, canvas, scan){
+  p.status = 'reading'; renderPhotos(); renderCheck();
   await new Promise(r => setTimeout(r, 30)); // 先讓「辨識中」顯示出來
   let qr = null;
   try{ qr = scanInvoice(scan || canvas); }catch(e){ qr = null; }
@@ -484,7 +494,8 @@ function renderCheck(){
   if (!photos.length){ box.innerHTML = ''; return; }
   const rows = photos.map((p,i) => {
     if (p.status === 'reading') return `<li><b>收據 ${i+1}</b>　辨識中…</li>`;
-    if (p.status === 'fail') return `<li><b>收據 ${i+1}</b>　無法自動辨識，請手動填寫金額<br><span>${esc(p.error || '')}</span></li>`;
+    if (p.status === 'queued') return `<li><b>收據 ${i+1}</b>　等待辨識…</li>`;
+    if (p.status === 'fail') return `<li><b>收據 ${i+1}</b>　無法自動辨識，可點照片下方「重新辨識」或手動填寫金額<br><span>${esc(p.error || '')}</span></li>`;
     const r = p.result;
     const meta = [r.seller, r.sellerTaxId && ('賣方統編 ' + r.sellerTaxId),
       r.buyerTaxId && !/^0+$/.test(r.buyerTaxId) && ('買方統編 ' + r.buyerTaxId), r.invoiceNo, r.date].filter(Boolean).join('　');
@@ -559,7 +570,7 @@ function parseInvoice(left, right){
 
 /* ===== 送出 ===== */
 async function doSubmit(){
-  if (photos.some(p => p.status === 'reading')) return toast('收據還在辨識中，請稍候');
+  if (photos.some(p => p.status === 'reading' || p.status === 'queued')) return toast('收據還在辨識中，請稍候');
   const data = {
     type: (document.querySelector('input[name=type]:checked') || {}).value,
     amount: amountValue(),
